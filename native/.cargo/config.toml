@@ -8,3 +8,14 @@ rustflags = [
   "-C", "link-arg=-static",
   "-C", "link-arg=-no-pie",
 ]
+
+# EXPLORATORY (explore/livid-mips): Ingenic X1600, O32 hard-float MIPS32r2. Tier 3 — no prebuilt
+# std, build with `-Z build-std` on nightly. linker path is this machine's cross toolchain, not a
+# real setup yet.
+[target.mipsel-unknown-linux-gnu]
+linker = "/tmp/x1600work/cross/mipsel-gnu/mipsel-unknown-linux-gnu/bin/mipsel-linux-gnu-gcc"
+rustflags = [
+  "-C", "target-feature=+crt-static",
+  "-C", "relocation-model=static",
+  "-C", "link-arg=-static",
+]
