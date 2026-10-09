@@ -27,13 +27,22 @@ fn board() -> (&'static str, &'static str) {
     if has(b"livi,link-imx6ull") {
         return imx6ul::module();
     }
+    // EXPLORATORY (explore/livid-mips): the X1600 ("Mini Ultra 3") stays on its own vendor
+    // kernel — see explore/livid-mips's commit for why a mainline port isn't viable yet. Its
+    // devicetree is the vendor's own, not one of ours, so this matches it as it actually is:
+    // "ingenic,x1600_halley6_module_base" then "ingenic,x1600".
+    if has(b"ingenic,x1600") {
+        return ("X1600 + AIC8800D80 (SDIO)", "x1600_aic8800d80");
+    }
     ("V821B + AIC8800D80", "v821b_aic8800d80")
 }
 
 fn wifi_standards(target: &str) -> livi_wifid::server::Standards {
     use livi_wifid::server::Standards;
     match target {
-        "v821b_aic8800d80" | "ax520_aic8800d80" => Standards { vht: true, he: true },
+        "v821b_aic8800d80" | "ax520_aic8800d80" | "x1600_aic8800d80" => {
+            Standards { vht: true, he: true }
+        }
         "imx6ul_rtl8822cs" | "imx6ul_rtl8822bs" => Standards { vht: true, he: false },
         _ => Standards::default(),
     }
@@ -83,6 +92,16 @@ fn web_caps() -> livi_web::WebCaps {
                 ..Default::default()
             },
         ),
+        // EXPLORATORY (explore/livid-mips): `MtdSlot` writes a fixed node unconditionally — right
+        // for every other board here, where the slot it names is never the one actually running.
+        // X1600's `kernel`/`rootfs` ARE whatever bank is currently running (it is A/B: `kernel2`/
+        // `rootfs2` sit behind them, and the vendor's own `ota` partition says which pair is
+        // live) — a plain MtdSlot write through this table would overwrite the live system under
+        // itself. Updating this board for real needs its own bank-aware path in livi-web, not a
+        // Flash{} table, so this leaves it empty: httpd's own updater is a no-op here, and
+        // `livi-link-provision dongle mips x1600 flash` (which already does the real, bank-aware
+        // vendor dance) is how an X1600 gets flashed.
+        "x1600_aic8800d80" => (false, livi_web::Flash::default()),
         _ => (
             true,
             livi_web::Flash {
@@ -98,9 +117,16 @@ fn web_caps() -> livi_web::WebCaps {
         model: model.into(),
         target: target.into(),
         port: 80,
+        // EXPLORATORY: on X1600 this is only ever reached if its composite USB gadget (owned by
+        // the vendor's sdsdk, not us — see explore/livid-mips) exposes a plain CDC-ECM/NCM
+        // function at this name while a phone is attached. Not yet confirmed either way with a
+        // phone actually plugged in; wifid's control channel is dead until it is.
         wifi_iface: "wlan0".into(),
         host_iface: "usb0".into(),
         mfi: mfid::STATE.into(),
+        // EXPLORATORY: there is no hci0 on X1600 — BT is entirely inside the vendor's sdsdk, not
+        // the kernel's Bluetooth subsystem (see explore/livid-mips). Harmless to leave as-is only
+        // because btd is not run on this board; mfid isn't run here either, for the same reason.
         bt: "hci0".into(),
         led,
         flash,
@@ -161,6 +187,7 @@ mod tests {
         let ac_ax = Standards { vht: true, he: true };
         assert_eq!(wifi_standards("v821b_aic8800d80"), ac_ax);
         assert_eq!(wifi_standards("ax520_aic8800d80"), ac_ax);
+        assert_eq!(wifi_standards("x1600_aic8800d80"), ac_ax);
         assert_eq!(wifi_standards("imx6ul_rtl8822cs"), Standards { vht: true, he: false });
         assert_eq!(wifi_standards("imx6ul_rtl8822bs"), Standards { vht: true, he: false });
         assert_eq!(wifi_standards("imx6ul_iw416"), Standards::default());
