@@ -14,6 +14,12 @@ const SHELL: &[u8] = include_bytes!("../../../../assets/bindshell/mipsel");
 const SHELL_PATH: &str = "/usr/bin/livi-link-shell";
 const INIT_SCRIPT_PATH: &str = "/etc/init.d/S98livi_link_shell";
 
+/// Lives on the `userdata` partition (`/usr/data`, a separate ubifs mount untouched by an OTA
+/// flash), not in this squashfs — so it can be dropped or updated without reflashing. Only the
+/// trigger that respawns it on every boot needs to live in the rootfs.
+const WATCH_SCRIPT_PATH: &str = "/usr/data/livi_usb_watch.sh";
+const WATCH_INIT_SCRIPT_PATH: &str = "/etc/init.d/S97livi_usb_watch";
+
 fn init_script() -> String {
     format!(
         "#!/bin/sh\n\
@@ -24,6 +30,40 @@ fn init_script() -> String {
          \n\
          stop() {{\n\
          \tkillall livi-link-shell\n\
+         }}\n\
+         \n\
+         case \"$1\" in\n\
+         \tstart)\n\
+         \t\tstart\n\
+         \t\t;;\n\
+         \tstop)\n\
+         \t\tstop\n\
+         \t\t;;\n\
+         \trestart|reload)\n\
+         \t\tstop\n\
+         \t\tstart\n\
+         \t\t;;\n\
+         \t*)\n\
+         \t\techo \"Usage: $0 {{start|stop|restart}}\"\n\
+         \t\texit 1\n\
+         esac\n\
+         \n\
+         exit $?\n"
+    )
+}
+
+/// Starts `WATCH_SCRIPT_PATH` on boot, if present — a no-op if `/usr/data` hasn't got it (e.g. a
+/// factory reset of that partition), so this trigger is safe to leave in the rootfs permanently.
+fn watch_init_script() -> String {
+    format!(
+        "#!/bin/sh\n\
+         \n\
+         start() {{\n\
+         \t[ -x {WATCH_SCRIPT_PATH} ] && {WATCH_SCRIPT_PATH} &\n\
+         }}\n\
+         \n\
+         stop() {{\n\
+         \tkillall livi_usb_watch.sh 2>/dev/null\n\
          }}\n\
          \n\
          case \"$1\" in\n\
@@ -67,6 +107,7 @@ pub fn with_shell(ota: &[u8]) -> Result<Vec<u8>, String> {
 
     put(&mut writer, SHELL_PATH, SHELL.to_vec())?;
     put(&mut writer, INIT_SCRIPT_PATH, init_script().into_bytes())?;
+    put(&mut writer, WATCH_INIT_SCRIPT_PATH, watch_init_script().into_bytes())?;
 
     let mut squashfs = Cursor::new(Vec::new());
     writer.write(&mut squashfs).map_err(|e| format!("rootfs: {e}"))?;
@@ -111,6 +152,17 @@ mod tests {
         let script = String::from_utf8(file_in(parts.rootfs, INIT_SCRIPT_PATH).unwrap()).unwrap();
         assert!(script.starts_with("#!/bin/sh\n"));
         assert!(script.contains(&format!("{SHELL_PATH} 2323 &")));
+    }
+
+    #[test]
+    fn the_usb_watch_trigger_starts_the_userdata_script_if_present() {
+        let ota = image::build(b"kernel-bytes", &fake_rootfs(None));
+        let patched = with_shell(&ota).unwrap();
+        let parts = image::parse(&patched).unwrap();
+        let script =
+            String::from_utf8(file_in(parts.rootfs, WATCH_INIT_SCRIPT_PATH).unwrap()).unwrap();
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(script.contains(&format!("[ -x {WATCH_SCRIPT_PATH} ] && {WATCH_SCRIPT_PATH} &")));
     }
 
     #[test]
